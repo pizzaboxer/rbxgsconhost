@@ -6,7 +6,7 @@ To use it, copy the RBXGS DLLs to the same folder as LoaderTest.exe, and run it.
 
 Excuse the horrid code, this is my first time touching C++ in like over 2 years or something. Don't run this in a production environment (yet) please. There's a lot of things to currently be fixed and improved. As it stands this is just a rough proof-of-concept.
 
-This *must* be compiled using MSVC 8 on Visual Studio 2005.
+This *must* be compiled using MSVC 8 on Visual Studio 2005. Releases are given if you don't feel like spending a few hours setting up an environment to do that.
 
 Things that still need doing:
 - Make Ctrl+C work
