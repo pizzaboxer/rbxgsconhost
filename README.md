@@ -6,13 +6,14 @@ To use it, copy the RBXGS DLLs to the same folder as RBXGSConHost.exe, and run i
 
 Excuse the horrid code, this is my first time touching C++ in like over 2 years or something. Don't run this in a production environment (yet) please. There's a lot of things to currently be fixed and improved. As it stands this is just a rough proof-of-concept.
 
-This *must* be compiled using MSVC 8 on Visual Studio 2005. Releases are given if you don't feel like spending a few hours setting up an environment to do that, or the 40% chance of it crashing whenever you click on it.
+This *must* be compiled using MSVC 8 on Visual Studio 2005. Releases are given if you don't feel like spending a few hours setting up an environment to do that, or dealing with the 40% chance of it crashing whenever you click on it.
 
 Things that still need doing:
 - Make Ctrl+C work
 - Allowing the port to be set
 - Replacing the HTTP parser
 - Fixing any lazily-done memory operations that are vulnerable (relates to above point)
+- Getting content folder loading working
 - StandardOut console printing hook with symbols
 
 ![image-1](https://github.com/user-attachments/assets/96f46aec-be4c-4470-97b0-9f2e809722ba)
