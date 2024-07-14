@@ -28,7 +28,7 @@ HTTPConnection* HTTPConnection::Get(SOCKET clientSocket)
 
 	if (iter == g_httpConnections.end())
 	{
-		printf("Invalid socket %d\n", clientSocket);
+		printf("Could not find connection %d\n", clientSocket);
 		return NULL;
 	}
 
@@ -77,8 +77,16 @@ void HTTPConnection::TerminateWithError(int code)
 
 void HTTPConnection::FlushAndClose()
 {
+    if (closed)
+    {
+        puts("WARNING: connection already closed\n");
+        return;
+    }
+
     if (send(clientSocket, response.c_str(), response.length(), 0) == SOCKET_ERROR)
 		printf("Warning: client socket send error! (%d)\n", WSAGetLastError());
 
 	closesocket(clientSocket);
+
+    closed = true;
 }
