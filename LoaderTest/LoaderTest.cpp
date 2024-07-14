@@ -5,12 +5,9 @@
 
 #include <httpext.h>
 #include <crtdbg.h>
-#include <sstream>
 #include <windows.h>
-#include <string>
-#include <vector>
-#include <map>
 #include "stdint.h"
+#include "HTTPConnection.h"
 
 // specify in linker later
 #pragma comment(lib, "Ws2_32.lib")
@@ -25,28 +22,8 @@ typedef DWORD(WINAPI* HttpExtensionProc_t)(EXTENSION_CONTROL_BLOCK*);
 bool g_running = true;
 SOCKET g_serverSocket;
 
-std::map<SOCKET, std::string*> g_clientConnections;
-
 GetExtensionVersion_t g_getExtensionVersion;
 HttpExtensionProc_t g_httpExtensionProc;
-
-void FlushAndTerminateHTTPClient(SOCKET clientSocket)
-{
-	std::map<SOCKET, std::string*>::iterator conn = g_clientConnections.find(clientSocket);
-
-	if (conn == g_clientConnections.end())
-	{
-		printf("Warning: tried to flush invalid socket %d\n", clientSocket);
-		return;
-	}
-
-	if (send(clientSocket, conn->second->c_str(), conn->second->length(), 0) == SOCKET_ERROR)
-		printf("Warning: client socket send error (%d)\n", WSAGetLastError());
-
-	closesocket(clientSocket);
-
-	g_clientConnections.erase(clientSocket);
-}
 
 BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuffer, LPDWORD lpdwSize)
 {
@@ -59,15 +36,7 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 {
     printf("WriteClient called\n");
 
-	SOCKET clientSocket = (SOCKET)ConnID;
-
-	std::map<SOCKET, std::string*>::iterator conn = g_clientConnections.find(clientSocket);
-
-	if (conn == g_clientConnections.end())
-	{
-		printf("Invalid socket %d\n", clientSocket);
-		return FALSE;
-	}
+	HTTPConnection *conn = HTTPConnection::Get((SOCKET)ConnID);
 
 	std::stringstream response;
 
@@ -76,7 +45,7 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 	response << "\r\n";
 	response << (char*)Buffer << "\r\n";
 
-	conn->second->append(response.str());
+	conn->response.append(response.str());
 	
     return TRUE;
 }
@@ -93,20 +62,13 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
     printf("dwHSERequest: %d\n", dwHSERequest);
     // printf("lpdwSize: %x\n", *lpdwSize);
 
-	SOCKET clientSocket = (SOCKET)hConn;
-
-	std::map<SOCKET, std::string*>::iterator conn = g_clientConnections.find(clientSocket);
-
-	if (conn == g_clientConnections.end())
-	{
-		printf("Invalid socket %d\n", clientSocket);
-		return FALSE;
-	}
+	HTTPConnection *conn = HTTPConnection::Get((SOCKET)hConn);
 
     switch (dwHSERequest)
     {
 	case HSE_REQ_DONE_WITH_SESSION: //4
-		FlushAndTerminateHTTPClient(clientSocket);
+		conn->FlushAndClose();
+		delete conn;
 		return TRUE;
 
     case HSE_REQ_GET_IMPERSONATION_TOKEN: //1011
@@ -123,9 +85,9 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
 
     case HSE_REQ_SEND_RESPONSE_HEADER_EX: //1016
 		HSE_SEND_HEADER_EX_INFO *headerData = (HSE_SEND_HEADER_EX_INFO*)lpvBuffer;
-		conn->second->append("HTTP/1.1 ");
-		conn->second->append(headerData->pszStatus);
-		conn->second->append("\r\n");
+		conn->response.append("HTTP/1.1 ");
+		conn->response.append(headerData->pszStatus);
+		conn->response.append("\r\n");
         return TRUE;
     }
 
@@ -180,54 +142,6 @@ bool StartHTTPServer(const char *port)
     return true;
 }
 
-void TerminateHTTPClientStatus(SOCKET clientSocket, int code)
-{
-	std::map<SOCKET, std::string*>::iterator conn = g_clientConnections.find(clientSocket);
-
-	if (conn == g_clientConnections.end())
-	{
-		printf("Invalid socket %d\n", clientSocket);
-		return;
-	}
-
-	char *statusLine = "";
-	char body[64];
-	std::stringstream ssResponse;
-
-	switch (code)
-	{
-	case 400:
-		statusLine = "Bad Request";
-		break;
-	case 413:
-		statusLine = "Content Too Large";
-		break;
-	}
-
-	ssResponse << "HTTP/1.1 " << code;
-
-	if (statusLine == "")
-	{
-		ssResponse << "\r\n";
-		sprintf_s(body, "<h1>HTTP %d</h1>", code);
-	}
-	else
-	{
-		ssResponse << " " << statusLine << "\r\n";
-		sprintf_s(body, "<h1>%s</h1>", statusLine);
-	}
-
-	ssResponse << "Content-Type: text/html\r\n";
-	ssResponse << "Connection: close\r\n";
-	ssResponse << "Content-Length: " << strlen(body) << "\r\n";
-	ssResponse << "\r\n";
-	ssResponse << body;
-
-	conn->second->assign(ssResponse.str());
-
-	FlushAndTerminateHTTPClient(clientSocket);
-}
-
 void HandleHTTPRequest()
 {
     SOCKET clientSocket = accept(g_serverSocket, NULL, NULL);
@@ -237,8 +151,8 @@ void HandleHTTPRequest()
 	    printf("accept failed: %d\n", WSAGetLastError());
         return;
     }
-
-	g_clientConnections.insert(std::pair<SOCKET, std::string*>(clientSocket, new std::string("")));
+	
+    HTTPConnection *conn = HTTPConnection::CreateNew(clientSocket);
 
     char recvbuf[4096];
 	const char *method, *path;
@@ -264,12 +178,14 @@ void HandleHTTPRequest()
 			}
     		else if (pret == -1)
 			{
-				TerminateHTTPClientStatus(clientSocket, 400);
+				conn->TerminateWithError(400);
+				delete conn;
 				return;
 			}
 			else if (buflen == sizeof(recvbuf))
 			{
-				TerminateHTTPClientStatus(clientSocket, 413);
+				conn->TerminateWithError(413);
+				delete conn;
 				return;
 			}
 			
@@ -283,8 +199,8 @@ void HandleHTTPRequest()
 		else 
 		{
 			printf("Client socket receive error: %d\n", WSAGetLastError());
-			closesocket(clientSocket);
-			g_clientConnections.erase(clientSocket);
+			conn->FlushAndClose();
+			delete conn;
 			return;
 		}
 	} while (rret > 0);
@@ -416,47 +332,6 @@ int _tmain(int argc, _TCHAR* argv[])
 	{
 		HandleHTTPRequest();
 	}
-
-
-
-	// 	if (NULL != httpExtensionProc)
-	// 	{
-	// 		/*printf("GetServerVariable: %p\n", GetServerVariable);
-	// 		printf("ReadClient: %p\n", ReadClient);
-	// 		printf("WriteClient: %p\n", WriteClient);
-	// 		printf("ServerSupportFunction: %p\n", ServerSupportFunction);*/
-	     
-	// 		EXTENSION_CONTROL_BLOCK ecb = { 0 };
-
-	// 		/*printf("ecb: %p\n", &ecb);
-	// 		printf("ecb.WriteClient: %p\n", &ecb.WriteClient);
-	// 		printf("ecb.ServerSupportFunction: %p\n", &ecb.ServerSupportFunction);*/
-
-	// 		ecb.cbSize = sizeof(ecb);
-	// 		ecb.ConnID = (HCONN)34632;
-	// 		ecb.dwVersion = 393216; // IIS 6.0
-	// 		ecb.dwHttpStatusCode = 200;
-	// 		ecb.lpszMethod = (LPSTR)"GET";
-	// 		ecb.lpszQueryString = (LPSTR)"";
-	// 		ecb.lpszPathInfo = (LPSTR)"/RBXGS/WebService.dll";
-	// 		ecb.lpszPathTranslated = (LPSTR)"C:\\inetpub\\wwwroot\\RBXGS\\WebService.dll";
-	// 		ecb.lpszContentType = (LPSTR)"";
-	// 		ecb.GetServerVariable = GetServerVariable;
-	// 		ecb.WriteClient = WriteClient;
-	// 		ecb.ReadClient = ReadClient;
-	// 		ecb.ServerSupportFunction = ServerSupportFunction;
-
-	// 		httpExtensionProc(&ecb);
-	// 	}
-	// 	else
-	// 	{
-	// 		printf("Could not get proc address: %d\n", GetLastError());
-	// 	}
-	// }
-	// else
-	// {
-	// 	printf("Could not get module handle: %d\n", GetLastError());
-	// }
 
 	return 0;
 }

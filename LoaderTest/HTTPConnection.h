@@ -1,9 +1,17 @@
+#pragma once
+
 class HTTPConnection
 {
 private:
-    SOCKET socket;
-    std::string response;
+    SOCKET clientSocket;
+    bool closed;
 
 public:
-    HTTPConnection(SOCKET socket);
+    std::string response;
+    HTTPConnection(SOCKET clientSocket);
+    ~HTTPConnection();
+    void TerminateWithError(int code);
+    static HTTPConnection* CreateNew(SOCKET clientSocket);
+    static HTTPConnection* Get(SOCKET clientSocket);
+    void FlushAndClose();
 };
