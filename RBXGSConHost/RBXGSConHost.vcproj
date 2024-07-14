@@ -2,9 +2,9 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="8.00"
-	Name="LoaderTest"
+	Name="RBXGSConHost"
 	ProjectGUID="{71EA4182-3CDC-4BEE-B94A-8843FCD5140B}"
-	RootNamespace="LoaderTest"
+	RootNamespace="RBXGSConHost"
 	Keyword="Win32Proj"
 	>
 	<Platforms>
@@ -179,7 +179,7 @@
 				>
 			</File>
 			<File
-				RelativePath=".\LoaderTest.cpp"
+				RelativePath=".\RBXGSConHost.cpp"
 				>
 			</File>
 			<File
