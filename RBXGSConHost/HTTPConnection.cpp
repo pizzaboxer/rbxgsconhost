@@ -1,30 +1,30 @@
 #include "stdafx.h"
 #include "HTTPConnection.h"
 
-std::map<SOCKET, HTTPConnection*> g_httpConnections;
+std::map<SOCKET, HTTPConnection *> g_httpConnections;
 
 HTTPConnection::HTTPConnection(SOCKET clientSocket)
 {
-    this->clientSocket = clientSocket;
-    this->response = "";
-    this->closed = false;
+	this->clientSocket = clientSocket;
+	this->response = "";
+	this->closed = false;
 }
 
 HTTPConnection::~HTTPConnection()
 {
-    g_httpConnections.erase(clientSocket);
+	g_httpConnections.erase(clientSocket);
 }
 
-HTTPConnection* HTTPConnection::CreateNew(SOCKET clientSocket)
+HTTPConnection *HTTPConnection::CreateNew(SOCKET clientSocket)
 {
-    HTTPConnection *conn = new HTTPConnection(clientSocket);
-    g_httpConnections.insert(std::pair<SOCKET, HTTPConnection*>(clientSocket, conn));
-    return conn;
+	HTTPConnection *conn = new HTTPConnection(clientSocket);
+	g_httpConnections.insert(std::pair<SOCKET, HTTPConnection *>(clientSocket, conn));
+	return conn;
 }
 
-HTTPConnection* HTTPConnection::Get(SOCKET clientSocket)
+HTTPConnection *HTTPConnection::Get(SOCKET clientSocket)
 {
-    std::map<SOCKET, HTTPConnection*>::iterator iter = g_httpConnections.find(clientSocket);
+	std::map<SOCKET, HTTPConnection *>::iterator iter = g_httpConnections.find(clientSocket);
 
 	if (iter == g_httpConnections.end())
 	{
@@ -32,7 +32,7 @@ HTTPConnection* HTTPConnection::Get(SOCKET clientSocket)
 		return NULL;
 	}
 
-    return iter->second;
+	return iter->second;
 }
 
 void HTTPConnection::TerminateWithError(int code)
@@ -77,16 +77,16 @@ void HTTPConnection::TerminateWithError(int code)
 
 void HTTPConnection::FlushAndClose()
 {
-    if (closed)
-    {
-        puts("WARNING: connection already closed\n");
-        return;
-    }
+	if (closed)
+	{
+		puts("WARNING: connection already closed\n");
+		return;
+	}
 
-    if (send(clientSocket, response.c_str(), response.length(), 0) == SOCKET_ERROR)
+	if (send(clientSocket, response.c_str(), response.length(), 0) == SOCKET_ERROR)
 		printf("Warning: client socket send error! (%d)\n", WSAGetLastError());
 
 	closesocket(clientSocket);
 
-    closed = true;
+	closed = true;
 }

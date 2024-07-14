@@ -1,7 +1,8 @@
 #pragma once
 
 // same as phr_header from picohttpparser
-struct HTTPHeader {
+struct HTTPHeader
+{
     const char *name;
     size_t name_len;
     const char *value;
@@ -16,15 +17,15 @@ private:
 
 public:
     std::string response;
-    
+
     HTTPHeader *headers;
     int num_headers, http_minor_ver;
 
     HTTPConnection(SOCKET clientSocket);
     ~HTTPConnection();
 
-    static HTTPConnection* CreateNew(SOCKET clientSocket);
-    static HTTPConnection* Get(SOCKET clientSocket);
+    static HTTPConnection *CreateNew(SOCKET clientSocket);
+    static HTTPConnection *Get(SOCKET clientSocket);
 
     void TerminateWithError(int code);
     void FlushAndClose();
