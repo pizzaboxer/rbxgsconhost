@@ -10,7 +10,6 @@ This *must* be compiled using MSVC 8 on Visual Studio 2005. Releases are given i
 
 Things that still need doing:
 - Make Ctrl+C work
-- Allowing the port to be set
 - Replacing the HTTP parser
 - Getting content folder loading working
 - StandardOut console printing hook with symbols
