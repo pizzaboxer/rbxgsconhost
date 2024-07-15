@@ -24,7 +24,7 @@ typedef DWORD(WINAPI *HttpExtensionProc_t)(EXTENSION_CONTROL_BLOCK *);
 char g_modulePath[256];
 bool g_running = true;
 char g_serverAddress[48];
-const char *g_serverPort;
+char g_serverPort[6];
 SOCKET g_serverSocket;
 
 GetExtensionVersion_t g_getExtensionVersion;
@@ -420,8 +420,22 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
 
 int _tmain(int argc, _TCHAR *argv[])
 {
-	const char *port = "64989";
-	g_serverPort = port;
+	strcpy_s(g_serverPort, "64989");
+
+	if (argc > 0)
+	{
+		for (int i = 0; i < argc-1; i++)
+		{
+			if (wcscmp(argv[i], L"-p") == 0 || wcscmp(argv[i], L"--port") == 0)
+			{
+				wchar_t *val = argv[i+1];
+				int intVal = _wtoi(val);
+
+				if (intVal > 0 && intVal < 65535)
+					_itoa_s(intVal, g_serverPort, 10);
+			}
+		}
+	}
 
 	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
@@ -464,13 +478,13 @@ int _tmain(int argc, _TCHAR *argv[])
 
 	WSAAddressToStringA(address->Address.lpSockaddr, address->Address.iSockaddrLength, NULL, g_serverAddress, &serverAddressLen);
 
-	if (!StartHTTPServer(port))
+	if (!StartHTTPServer(g_serverPort))
 	{
 		puts("Could not start HTTP server\n");
 		return 1;
 	}
 
-	printf("Listening on port %s\n", port);
+	printf("Listening on port %s\n", g_serverPort);
 
 	while (g_running)
 	{
