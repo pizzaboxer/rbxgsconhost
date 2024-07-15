@@ -223,7 +223,7 @@ void HandleHTTPRequest()
 
 	HTTPConnection *conn = HTTPConnection::CreateNew(clientSocket);
 
-	char recvbuf[4096];
+	char recvbuf[4096] = "";
 	const char *method, *path_and_query;
 	struct phr_header headers[100];
 	size_t buflen = 0, prevbuflen = 0, method_len, path_and_query_len, num_headers;
@@ -281,7 +281,7 @@ void HandleHTTPRequest()
 
 	const char *contentType = "";
 	int contentLength = 0;
-	char path[256], query[256];
+	char path[256] = "", query[256] = "";
 
 	for (int i = 0; i != num_headers; ++i)
 	{

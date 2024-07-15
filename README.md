@@ -12,7 +12,6 @@ Things that still need doing:
 - Make Ctrl+C work
 - Allowing the port to be set
 - Replacing the HTTP parser
-- Fixing any lazily-done memory operations that are vulnerable (relates to above point)
 - Getting content folder loading working
 - StandardOut console printing hook with symbols
 
