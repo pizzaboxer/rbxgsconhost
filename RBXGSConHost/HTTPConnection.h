@@ -20,6 +20,7 @@ public:
 
     HTTPHeader *headers;
     int num_headers, http_minor_ver;
+    const char *host, *path;
 
     HTTPConnection(SOCKET clientSocket);
     ~HTTPConnection();

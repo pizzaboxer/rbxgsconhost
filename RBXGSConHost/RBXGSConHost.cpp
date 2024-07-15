@@ -6,11 +6,13 @@
 #include <httpext.h>
 #include <crtdbg.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include "stdint.h"
 #include "HTTPConnection.h"
 
 // specify in linker later
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Iphlpapi.lib")
 
 // including this as part of the vcproj doesn't work properly,
 // i'll try and fix this later
@@ -21,6 +23,8 @@ typedef DWORD(WINAPI *HttpExtensionProc_t)(EXTENSION_CONTROL_BLOCK *);
 
 char g_modulePath[256];
 bool g_running = true;
+char g_serverAddress[48];
+const char *g_serverPort;
 SOCKET g_serverSocket;
 
 GetExtensionVersion_t g_getExtensionVersion;
@@ -31,11 +35,37 @@ BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuf
 	// printf("GetServerVariable called\n");
 	// printf("%s %d\n", lpszVariableName, *lpdwSize);
 
+	char *szBuffer = (char*)lpvBuffer;
 	HTTPConnection *conn = HTTPConnection::Get((SOCKET)hConn);
+
+	if (strcmp(lpszVariableName, "SERVER_NAME") == 0)
+	{
+		strcpy_s(szBuffer, *lpdwSize, conn->host);
+		return TRUE;
+	}
 
 	if (strcmp(lpszVariableName, "SERVER_PROTOCOL") == 0)
 	{
-		sprintf((char *)lpvBuffer, "HTTP/1.%d", conn->http_minor_ver);
+		sprintf_s(szBuffer, *lpdwSize, "HTTP/1.%d", conn->http_minor_ver);
+		return TRUE;
+	}
+
+	if (strcmp(lpszVariableName, "SERVER_PORT") == 0)
+	{
+		strcpy_s(szBuffer, *lpdwSize, g_serverPort);
+		return TRUE;
+	}
+
+	if (strcmp(lpszVariableName, "HTTPS") == 0)
+	{
+		// should this follow X-Forwarded-Proto?
+		strcpy_s(szBuffer, *lpdwSize, "off");
+		return TRUE;
+	}
+
+	if (strcmp(lpszVariableName, "URL") == 0)
+	{
+		strcpy_s(szBuffer, *lpdwSize, conn->path);
 		return TRUE;
 	}
 
@@ -57,7 +87,7 @@ BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuf
 				return FALSE;
 			}
 
-			strncpy_s((char *)lpvBuffer, *lpdwSize, conn->headers[i].value, conn->headers[i].value_len);
+			strncpy_s(szBuffer, *lpdwSize, conn->headers[i].value, conn->headers[i].value_len);
 			return TRUE;
 		}
 	}
@@ -71,17 +101,18 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 {
 	// printf("WriteClient called\n");
 
+	char *szBuffer = (char*)Buffer;
 	HTTPConnection *conn = HTTPConnection::Get((SOCKET)ConnID);
 
 	std::stringstream response;
 
-	if (strncmp((char *)Buffer, "<soap:", 6) == 0)
+	if (strncmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
 		response << "Content-Type: text/xml\r\n";
 
 	response << "Content-Length: " << *lpdwBytes << "\r\n";
 	response << "Connection: close\r\n";
 	response << "\r\n";
-	response << (char *)Buffer << "\r\n";
+	response << szBuffer << "\r\n";
 
 	conn->response.append(response.str());
 
@@ -193,9 +224,9 @@ void HandleHTTPRequest()
 	HTTPConnection *conn = HTTPConnection::CreateNew(clientSocket);
 
 	char recvbuf[4096];
-	const char *method, *path;
+	const char *method, *path_and_query;
 	struct phr_header headers[100];
-	size_t buflen = 0, prevbuflen = 0, method_len, path_len, num_headers;
+	size_t buflen = 0, prevbuflen = 0, method_len, path_and_query_len, num_headers;
 	int pret, rret, minor_version;
 
 	do
@@ -207,8 +238,7 @@ void HandleHTTPRequest()
 
 		if (rret > 0)
 		{
-			// TODO: replace HTTP parser, i don't really like this one :(
-			pret = phr_parse_request(recvbuf, buflen, &method, &method_len, &path, &path_len,
+			pret = phr_parse_request(recvbuf, buflen, &method, &method_len, &path_and_query, &path_and_query_len,
 									 &minor_version, headers, &num_headers, prevbuflen);
 
 			if (pret > 0)
@@ -217,6 +247,7 @@ void HandleHTTPRequest()
 			}
 			else if (pret == -1)
 			{
+
 				conn->TerminateWithError(400);
 				delete conn;
 				return;
@@ -244,42 +275,68 @@ void HandleHTTPRequest()
 		}
 	} while (rret > 0);
 
-	// printf("request is %d bytes long\n", pret);
-	// printf("method is %.*s\n", (int)method_len, method);
-	// printf("path is %.*s\n", (int)path_len, path);
-	// printf("HTTP version is 1.%d\n", minor_version);
-	// printf("headers:\n");
-
 	conn->headers = (HTTPHeader *)headers;
 	conn->num_headers = num_headers;
 	conn->http_minor_ver = minor_version;
+	conn->host = g_serverAddress;
 
-	char queryString[256];
 	const char *contentType = "";
 	int contentLength = 0;
-	char requestBody[4096];
+	char path[256], query[256];
 
 	for (int i = 0; i != num_headers; ++i)
 	{
 		if (_strnicmp(headers[i].name, "Content-Type", headers[i].name_len) == 0)
+		{
 			contentType = headers[i].value;
 
-		if (_strnicmp(headers[i].name, "Content-Length", headers[i].name_len) == 0)
+		}
+		else if (_strnicmp(headers[i].name, "Content-Length", headers[i].name_len) == 0)
+		{
 			contentLength = atoi(headers[i].value);
+
+		}
+		else if (_strnicmp(headers[i].name, "Host", headers[i].name_len) == 0)
+		{
+			// exclude the port
+
+			char host[64];
+			const char *headerVal = headers[i].value;
+			const char *portPos = strstr(headers[i].value, ":");
+			int headerValLen = headers[i].value_len;
+
+			if (portPos != NULL && portPos < headerVal + headerValLen)
+				strncpy_s(host, headers[i].value, portPos - headerVal);
+			else
+				strncpy_s(host, headers[i].value, headers[i].value_len);
+
+			conn->host = host;
+		}
 	}
 
-	// yes i know there are several buffer overflow vulns here in these strcpys be quiet ill fix it later
+	// picohttpparser does some weird things:
+	// - keeps the query string as part of the path (for some reason)
+	// - does not parse the request body
+	// we need to do those ourselves
 
-	// parse query string
-	const char *pos = strstr(path, "?");
-	if (pos != NULL)
+	const char *posQuery = strstr(path_and_query, "?");
+	if (posQuery != NULL && posQuery < path_and_query + path_and_query_len)
 	{
-		pos++; // skip over question mark
-		strncpy_s(queryString, pos, strstr(pos, " ") - pos);
-	}
+		const char *posEnd = strstr(posQuery, " ");
 
-	if (contentLength > 0)
-		strncpy_s(requestBody, strstr(recvbuf, "\r\n\r\n") + 4, contentLength);
+		if (posEnd != NULL)
+		{
+			posQuery++; // skip over question mark
+
+			int query_len = posEnd - posQuery;
+			int path_len = path_and_query_len - query_len - 1;
+
+			strncpy_s(path, path_and_query, path_len);
+			strncpy_s(query, posQuery, query_len);
+		}
+	}
+	
+	conn->path = path;
 
 	EXTENSION_CONTROL_BLOCK ecb = {0};
 
@@ -287,18 +344,29 @@ void HandleHTTPRequest()
 	ecb.ConnID = (HCONN)clientSocket;
 	ecb.dwVersion = 393216; // IIS 6.0
 	ecb.dwHttpStatusCode = 200;
-	ecb.lpszMethod = (LPSTR)method;
-	ecb.lpszQueryString = (LPSTR)queryString;
-	ecb.lpszPathInfo = (LPSTR) "/RBXGS/WebService.dll";
+
+	ecb.lpszPathInfo = (LPSTR)"/RBXGS/WebService.dll";
 	ecb.lpszPathTranslated = g_modulePath;
+
+	ecb.lpszMethod = (LPSTR)method;
+	ecb.lpszQueryString = (LPSTR)query;
 	ecb.cbTotalBytes = contentLength;
 	ecb.cbAvailable = contentLength;
-	ecb.lpbData = (LPBYTE)(contentLength > 0 ? requestBody : 0);
+	ecb.lpbData = NULL;
+	
 	ecb.lpszContentType = (LPSTR)contentType;
+
 	ecb.GetServerVariable = GetServerVariable;
 	ecb.WriteClient = WriteClient;
 	ecb.ReadClient = ReadClient;
 	ecb.ServerSupportFunction = ServerSupportFunction;
+
+	if (contentLength > 0)
+	{
+		char requestBody[4096];
+		strncpy_s(requestBody, strstr(recvbuf, "\r\n\r\n") + 4, contentLength);
+		ecb.lpbData = (LPBYTE)requestBody;
+	}
 
 	g_httpExtensionProc(&ecb);
 }
@@ -354,6 +422,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
 int _tmain(int argc, _TCHAR *argv[])
 {
 	const char *port = "64989";
+	g_serverPort = port;
 
 	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 
@@ -366,6 +435,35 @@ int _tmain(int argc, _TCHAR *argv[])
 	HSE_VERSION_INFO versionInfo = {0};
 	g_getExtensionVersion(&versionInfo);
 	printf("Starting %s\n", versionInfo.lpszExtensionDesc);
+
+
+	unsigned long lenAddresses = 16384;
+	PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES)malloc(lenAddresses);
+
+	if (addresses == NULL)
+	{
+		puts("Could not query adapters\n");
+		return 1;
+	}
+
+	int result = GetAdaptersAddresses(AF_UNSPEC, NULL, NULL, addresses, &lenAddresses);
+	
+	if (result != ERROR_SUCCESS)
+	{
+		printf("Could not query adapters (%d)\n", result);
+		return 1;
+	}
+
+	_IP_ADAPTER_UNICAST_ADDRESS *address = addresses->FirstUnicastAddress;
+	DWORD serverAddressLen = sizeof(g_serverAddress);
+
+	if (address == NULL)
+	{
+		puts("Could not query address\n");
+		return 1;
+	}
+
+	WSAAddressToStringA(address->Address.lpSockaddr, address->Address.iSockaddrLength, NULL, g_serverAddress, &serverAddressLen);
 
 	if (!StartHTTPServer(port))
 	{
