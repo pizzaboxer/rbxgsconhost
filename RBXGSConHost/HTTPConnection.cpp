@@ -1,10 +1,12 @@
 #include "stdafx.h"
 #include "HTTPConnection.h"
 
-std::map<SOCKET, HTTPConnection *> g_httpConnections;
+std::map<int, HTTPConnection *> g_httpConnections;
+int g_idCounter = 0;
 
-HTTPConnection::HTTPConnection(SOCKET clientSocket)
+HTTPConnection::HTTPConnection(int id, SOCKET clientSocket)
 {
+	this->id = id;
 	this->clientSocket = clientSocket;
 	this->response = "";
 	this->closed = false;
@@ -17,18 +19,18 @@ HTTPConnection::~HTTPConnection()
 
 HTTPConnection *HTTPConnection::CreateNew(SOCKET clientSocket)
 {
-	HTTPConnection *conn = new HTTPConnection(clientSocket);
-	g_httpConnections.insert(std::pair<SOCKET, HTTPConnection *>(clientSocket, conn));
+	HTTPConnection *conn = new HTTPConnection(++g_idCounter, clientSocket);
+	g_httpConnections.insert(std::pair<int, HTTPConnection *>(conn->id, conn));
 	return conn;
 }
 
-HTTPConnection *HTTPConnection::Get(SOCKET clientSocket)
+HTTPConnection *HTTPConnection::Get(int id)
 {
-	std::map<SOCKET, HTTPConnection *>::iterator iter = g_httpConnections.find(clientSocket);
+	std::map<int, HTTPConnection *>::iterator iter = g_httpConnections.find(id);
 
 	if (iter == g_httpConnections.end())
 	{
-		printf("Could not find connection %d\n", clientSocket);
+		printf("Could not find connection %d\n", id);
 		return NULL;
 	}
 

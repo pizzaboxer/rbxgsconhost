@@ -16,17 +16,19 @@ private:
     bool closed;
 
 public:
+    int id;
+
     std::string response;
 
     HTTPHeader *headers;
     int num_headers, http_minor_ver;
     const char *host, *path;
 
-    HTTPConnection(SOCKET clientSocket);
+    HTTPConnection(int id, SOCKET clientSocket);
     ~HTTPConnection();
 
     static HTTPConnection *CreateNew(SOCKET clientSocket);
-    static HTTPConnection *Get(SOCKET clientSocket);
+    static HTTPConnection *Get(int id);
 
     void TerminateWithError(int code);
     void FlushAndClose();

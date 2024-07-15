@@ -36,7 +36,7 @@ BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuf
 	// printf("%s %d\n", lpszVariableName, *lpdwSize);
 
 	char *szBuffer = (char*)lpvBuffer;
-	HTTPConnection *conn = HTTPConnection::Get((SOCKET)hConn);
+	HTTPConnection *conn = HTTPConnection::Get((int)hConn);
 
 	if (strcmp(lpszVariableName, "SERVER_NAME") == 0)
 	{
@@ -102,7 +102,7 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 	// printf("WriteClient called\n");
 
 	char *szBuffer = (char*)Buffer;
-	HTTPConnection *conn = HTTPConnection::Get((SOCKET)ConnID);
+	HTTPConnection *conn = HTTPConnection::Get((int)ConnID);
 
 	std::stringstream response;
 
@@ -131,7 +131,7 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
 	// printf("dwHSERequest: %d\n", dwHSERequest);
 	// printf("lpdwSize: %x\n", *lpdwSize);
 
-	HTTPConnection *conn = HTTPConnection::Get((SOCKET)hConn);
+	HTTPConnection *conn = HTTPConnection::Get((int)hConn);
 
 	switch (dwHSERequest)
 	{
@@ -247,7 +247,6 @@ void HandleHTTPRequest()
 			}
 			else if (pret == -1)
 			{
-
 				conn->TerminateWithError(400);
 				delete conn;
 				return;
@@ -341,7 +340,7 @@ void HandleHTTPRequest()
 	EXTENSION_CONTROL_BLOCK ecb = {0};
 
 	ecb.cbSize = sizeof(ecb);
-	ecb.ConnID = (HCONN)clientSocket;
+	ecb.ConnID = (HCONN)conn->id;
 	ecb.dwVersion = 393216; // IIS 6.0
 	ecb.dwHttpStatusCode = 200;
 
