@@ -60,6 +60,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
+				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib"
 				LinkIncremental="2"
 				GenerateDebugInformation="true"
 				SubSystem="1"
@@ -133,6 +134,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
+				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib"
 				LinkIncremental="1"
 				GenerateDebugInformation="true"
 				SubSystem="1"
@@ -179,6 +181,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\HTTPParser.cpp"
+				>
+			</File>
+			<File
 				RelativePath=".\RBXGSConHost.cpp"
 				>
 			</File>
@@ -210,6 +216,10 @@
 			>
 			<File
 				RelativePath=".\HTTPConnection.h"
+				>
+			</File>
+			<File
+				RelativePath=".\HTTPParser.h"
 				>
 			</File>
 			<File

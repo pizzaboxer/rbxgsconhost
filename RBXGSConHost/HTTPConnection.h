@@ -1,13 +1,6 @@
 #pragma once
 
-// same as phr_header from picohttpparser
-struct HTTPHeader
-{
-    const char *name;
-    size_t name_len;
-    const char *value;
-    size_t value_len;
-};
+#include "HTTPParser.h"
 
 class HTTPConnection
 {
@@ -18,11 +11,8 @@ private:
 public:
     int id;
 
+    HTTPParser *parser;
     std::string response;
-
-    HTTPHeader *headers;
-    int num_headers, http_minor_ver;
-    const char *host, *path;
 
     HTTPConnection(int id, SOCKET clientSocket);
     ~HTTPConnection();

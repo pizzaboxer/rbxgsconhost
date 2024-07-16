@@ -10,6 +10,7 @@ HTTPConnection::HTTPConnection(int id, SOCKET clientSocket)
 	this->clientSocket = clientSocket;
 	this->response = "";
 	this->closed = false;
+	this->parser = new HTTPParser();
 }
 
 HTTPConnection::~HTTPConnection()
@@ -20,7 +21,7 @@ HTTPConnection::~HTTPConnection()
 HTTPConnection *HTTPConnection::CreateNew(SOCKET clientSocket)
 {
 	HTTPConnection *conn = new HTTPConnection(++g_idCounter, clientSocket);
-	g_httpConnections.insert(std::pair<int, HTTPConnection *>(conn->id, conn));
+	g_httpConnections[conn->id] = conn;
 	return conn;
 }
 
