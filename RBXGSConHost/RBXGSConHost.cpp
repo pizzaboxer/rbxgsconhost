@@ -72,11 +72,22 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 
 	std::stringstream response;
 
+	time_t rawtime;
+	struct tm *timeinfo;
+	char timeHeaderBuf[64];
+
+	time(&rawtime);
+	timeinfo = gmtime(&rawtime);
+
+	strftime(timeHeaderBuf, sizeof(timeHeaderBuf), "%a, %d %b %Y %H:%M:%S GMT", timeinfo);
+
+	response << "Date: " << timeHeaderBuf << "\r\n";
+	response << "Server: RBXGSConHost\r\n";
+
 	if (strncmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
 		response << "Content-Type: text/xml\r\n";
 
 	response << "Content-Length: " << *lpdwBytes << "\r\n";
-	response << "Connection: close\r\n";
 	response << "\r\n";
 	response << szBuffer << "\r\n";
 
