@@ -1,6 +1,9 @@
 #include "stdafx.h"
 #include "HTTPParser.h"
 
+#include <vector>
+#include <algorithm>
+
 char transform_header(char c)
 {
     if (c == '-')
@@ -152,7 +155,7 @@ void HTTPParser::ParseHeader(std::string& line)
         }
     }
 
-    // convert to isapi format, e.g. User-Agent becomes HTTP_USER_AGENT
+    // convert to isapi variable format, e.g. User-Agent becomes HTTP_USER_AGENT
     std::transform(name.begin(), name.end(), name.begin(), transform_header);
     name.insert(0, "HTTP_");
     

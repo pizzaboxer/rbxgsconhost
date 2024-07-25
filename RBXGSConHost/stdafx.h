@@ -9,15 +9,12 @@
 #define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers
 
 #include <stdio.h>
-#include <time.h>
-#include <tchar.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <httpext.h>
 #include <string>
 #include <sstream>
 #include <map>
-#include <vector>
-#include <algorithm>
 
 
 

@@ -60,7 +60,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib"
+				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib Dbghelp.lib Shlwapi.lib lib\libMinHook-x86-v90-mtd.lib"
 				LinkIncremental="2"
 				GenerateDebugInformation="true"
 				SubSystem="1"
@@ -134,7 +134,7 @@
 			/>
 			<Tool
 				Name="VCLinkerTool"
-				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib"
+				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib Dbghelp.lib Shlwapi.lib lib\libMinHook-x86-v90-mtd.lib"
 				LinkIncremental="1"
 				GenerateDebugInformation="true"
 				SubSystem="1"
@@ -185,6 +185,10 @@
 				>
 			</File>
 			<File
+				RelativePath=".\RBXDefs.cpp"
+				>
+			</File>
+			<File
 				RelativePath=".\RBXGSConHost.cpp"
 				>
 			</File>
@@ -208,6 +212,10 @@
 					/>
 				</FileConfiguration>
 			</File>
+			<File
+				RelativePath=".\WebService.cpp"
+				>
+			</File>
 		</Filter>
 		<Filter
 			Name="Header Files"
@@ -223,6 +231,14 @@
 				>
 			</File>
 			<File
+				RelativePath=".\MinHook.h"
+				>
+			</File>
+			<File
+				RelativePath=".\RBXDefs.h"
+				>
+			</File>
+			<File
 				RelativePath=".\resource.h"
 				>
 			</File>
@@ -232,6 +248,10 @@
 			</File>
 			<File
 				RelativePath=".\stdint.h"
+				>
+			</File>
+			<File
+				RelativePath=".\WebService.h"
 				>
 			</File>
 		</Filter>

@@ -3,24 +3,25 @@
 
 #include "stdafx.h"
 
-#include <httpext.h>
-#include <crtdbg.h>
+#include <time.h>
 #include <windows.h>
+#include <tchar.h>
+#include <httpext.h>
 #include <iphlpapi.h>
+#include <dbghelp.h>
+#include <shlwapi.h>
+
+#include "MinHook.h"
 
 #include "HTTPConnection.h"
+#include "WebService.h"
+#include "RBXDefs.h"
 
-typedef BOOL(WINAPI *GetExtensionVersion_t)(HSE_VERSION_INFO *);
-typedef DWORD(WINAPI *HttpExtensionProc_t)(EXTENSION_CONTROL_BLOCK *);
-
-char g_modulePath[256];
-bool g_running = true;
+HANDLE g_consoleHandle;
+char g_modulePath[MAX_PATH];
 char g_serverAddress[48];
 char g_serverPort[6] = "64989";
 SOCKET g_serverSocket;
-
-GetExtensionVersion_t g_getExtensionVersion;
-HttpExtensionProc_t g_httpExtensionProc;
 
 BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuffer, LPDWORD lpdwSize)
 {
@@ -49,7 +50,7 @@ BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuf
 	if (iter == parser->serverVars.end())
 	{
 		SetLastError(ERROR_INVALID_INDEX);
-		printf("Failed to GetServerVariable %s (index not found)\n", lpszVariableName);
+		// printf("Failed to GetServerVariable %s (index not found)\n", lpszVariableName);
 		return FALSE;
 	}
 
@@ -184,6 +185,7 @@ bool StartHTTPServer(const char *port)
 		return false;
 	}
 
+	printf("Listening on port %s\n", g_serverPort);
 	return true;
 }
 
@@ -267,34 +269,100 @@ void HandleHTTPRequest()
 	ecb.ReadClient = ReadClient;
 	ecb.ServerSupportFunction = ServerSupportFunction;
 
-	g_httpExtensionProc(&ecb);
+	WebService::HttpExtensionProc(&ecb);
 }
 
-bool InitializeWebService()
+void __fastcall RBXStandardOutRaisedHook(void *_this, RBX::StandardOutMessage message)
 {
-	HMODULE hModule = LoadLibraryEx(TEXT("WebService.dll"), NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
-
-	if (hModule == NULL)
+	switch (message.type)
 	{
-		printf("Could not get Web service module handle: %d\n", GetLastError());
+		case RBX::MESSAGE_OUTPUT:
+			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+			break;
+
+		case RBX::MESSAGE_INFO:
+			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+			break;
+
+		case RBX::MESSAGE_WARNING:
+			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN);
+			break;
+
+		case RBX::MESSAGE_ERROR:
+			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_INTENSITY);
+			break;
+	}
+
+	puts(message.message.c_str());
+
+	SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+
+	RBX::StandardOutRaised(_this, message);	
+}
+
+bool InitializeSymbolHook()
+{
+	HANDLE hProcess = GetCurrentProcess();
+
+	SymSetOptions(SYMOPT_DEBUG | SYMOPT_LOAD_ANYTHING);
+
+	if (!SymInitialize(hProcess, NULL, FALSE))
+	{
+		printf("SymInitialize failed: %d\n", GetLastError());
 		return false;
 	}
 
-	GetModuleFileNameA(hModule, g_modulePath, sizeof(g_modulePath));
-
-	// calling GetExtensionVersion is necessary for initialization
-	g_getExtensionVersion = (GetExtensionVersion_t)GetProcAddress(hModule, "GetExtensionVersion");
-	g_httpExtensionProc = (HttpExtensionProc_t)GetProcAddress(hModule, "HttpExtensionProc");
-
-	if (g_getExtensionVersion == NULL)
+	DWORD moduleBase = SymLoadModuleEx(hProcess, NULL, g_modulePath, NULL, 0, 0, NULL, 0);
+	if (moduleBase == 0)
 	{
-		printf("Could not get proc address for GetExtensionVersion: %d\n", GetLastError());
+		printf("SymLoadModuleEx failed: %d\n", GetLastError());
 		return false;
 	}
 
-	if (g_httpExtensionProc == NULL)
+	IMAGEHLP_MODULE moduleInfo = {0};
+	moduleInfo.SizeOfStruct = sizeof(moduleInfo);
+	if (!SymGetModuleInfo(hProcess, moduleBase, &moduleInfo))
 	{
-		printf("Could not get proc address for HttpExtensionProc: %d\n", GetLastError());
+    	printf("SymGetModuleInfo failed: %d\n", GetLastError());
+    	return false;
+	}
+
+	if (moduleInfo.SymType != SYM_TYPE::SymPdb)
+	{
+		puts("Could not find WebService.pdb");
+		return false;
+	}
+
+	// void __thiscall RBX::Notifier<RBX::StandardOut,RBX::StandardOutMessage>::raise(
+	//         RBX::Notifier<RBX::StandardOut,RBX::StandardOutMessage> *this,
+	//         RBX::StandardOutMessage event)
+
+	// versions of windows that are too old will not be able to read the symbols (for some reason)
+	// only version i've tested this on is server 2003
+
+	IMAGEHLP_SYMBOL symbol = {0};
+	if (!SymGetSymFromName(hProcess, "?raise@?$Notifier@VStandardOut@RBX@@UStandardOutMessage@2@@RBX@@IBEXUStandardOutMessage@2@@Z", &symbol))
+	{
+		printf("SymGetSymFromName failed: %d\n", GetLastError());
+		puts("This may be because the version of Windows is too old");
+		return false;
+	}
+
+	if (MH_Initialize() != MH_OK)
+	{
+		puts("Failed to initialize MinHook");
+        return false;
+	}
+
+	if (MH_CreateHook((LPVOID)symbol.Address, RBXStandardOutRaisedHook, reinterpret_cast<LPVOID*>(&RBX::StandardOutRaised)) != MH_OK)
+	{
+		puts("Failed to create hook");
+		return false;
+	}
+
+	if (MH_EnableHook((LPVOID)symbol.Address) != MH_OK)
+	{
+		puts("Failed to enable hook");
 		return false;
 	}
 
@@ -340,16 +408,47 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
 	{
 	case CTRL_CLOSE_EVENT:
 		printf("CTRL_CLOSE_EVENT\n");
-		g_running = false;
+		WebService::Stop();
 		return TRUE;
 	}
 
 	return FALSE;
 }
 
+bool StartupSequence()
+{
+	if (!WebService::Initialize(g_modulePath))
+	{
+		puts("Could not initialize web service");
+		return false;
+	}
+
+	if (!InitializeSymbolHook())
+	{
+		puts("StandardOut redirection will not apply");
+	}
+
+	if (!QueryServerAddress())
+		return false;
+
+	if (!StartHTTPServer(g_serverPort))
+	{
+		puts("Could not start HTTP server");
+		return false;
+	}
+
+	return true;
+}
+
 int _tmain(int argc, _TCHAR *argv[])
 {
+	g_consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+
 	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+	
+	// by default, the base path is the folder the exe is located in
+	TCHAR *wszBaseDir = NULL;
+	char szBaseDir[MAX_PATH];
 
 	if (argc > 0)
 	{
@@ -362,31 +461,59 @@ int _tmain(int argc, _TCHAR *argv[])
 				if (port > 0 && port < 65535)
 					_itoa_s(port, g_serverPort, 10);
 			}
+			else if (wcscmp(argv[i], L"-b") == 0 || wcscmp(argv[i], L"--baseDir") == 0)
+			{
+				wszBaseDir = argv[i+1];
+			}
 		}
 	}
 
-	if (!InitializeWebService())
+	// we'll be handling it in ascii form since any place we use it only supports ascii anyway
+	if (wszBaseDir == NULL)
 	{
-		puts("Could not initialize web service\n");
+		wszBaseDir = (TCHAR*)malloc(MAX_PATH);
+		GetModuleFileName(NULL, wszBaseDir, MAX_PATH);
+		PathRemoveFileSpec(wszBaseDir);
+	}
+	else if (!PathIsDirectory(wszBaseDir))
+	{
+		puts("The specified base directory does not exist");
 		return 1;
 	}
 
-	HSE_VERSION_INFO versionInfo = {0};
-	g_getExtensionVersion(&versionInfo);
-	printf("Starting %s\n", versionInfo.lpszExtensionDesc);
+	wcstombs_s(NULL, szBaseDir, wszBaseDir, MAX_PATH-1);
 
-	if (!QueryServerAddress())
-		return 1;
+	PathCombineA(g_modulePath, szBaseDir, "WebService.dll");
 
-	if (!StartHTTPServer(g_serverPort))
+	bool dllMissing = false;
+
+	if (!PathFileExistsA(g_modulePath))
 	{
-		puts("Could not start HTTP server\n");
+		puts("Could not find WebService.dll");
+		dllMissing = true;
+	}
+
+	char *files[] = {"OSMESA32.DLL", "OPENGL32.DLL", "GLU32.DLL", "fmodex.dll"};
+
+	for (int i = 0; i < sizeof(files)/sizeof(char*); i++)
+	{
+		char path[256];
+		PathCombineA(path, szBaseDir, files[i]);
+
+		if (!PathFileExistsA(path))
+		{
+			printf("Could not find %s\n", files[i]);
+			dllMissing = true;
+		}
+	}
+
+	if (dllMissing || !StartupSequence())
+	{
+		WebService::Stop();
 		return 1;
 	}
 
-	printf("Listening on port %s\n", g_serverPort);
-
-	while (g_running)
+	while (WebService::Running)
 	{
 		HandleHTTPRequest();
 	}
