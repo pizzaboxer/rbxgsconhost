@@ -144,6 +144,8 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
 
 bool StartHTTPServer(const char *port)
 {
+	// WSA is implicitly initialized by RBXGS, seems to be <2.2.0
+
 	int result;
 
 	struct addrinfo addrHints = {0}, *addrResult = NULL;
@@ -155,7 +157,7 @@ bool StartHTTPServer(const char *port)
 	result = getaddrinfo(NULL, port, &addrHints, &addrResult);
 	if (result != 0)
 	{
-		printf("getaddrinfo failed: %d", result);
+		printf("getaddrinfo failed: %d\n", result);
 		return false;
 	}
 
@@ -163,25 +165,18 @@ bool StartHTTPServer(const char *port)
 	if (g_serverSocket == INVALID_SOCKET)
 	{
 		printf("Unable to create socket: %ld\n", WSAGetLastError());
-		freeaddrinfo(addrResult);
-		WSACleanup();
 		return false;
 	}
 
 	if (bind(g_serverSocket, addrResult->ai_addr, (int)addrResult->ai_addrlen) == SOCKET_ERROR)
 	{
 		printf("Unable to bind socket on port %s: %ld\n", port, WSAGetLastError());
-		freeaddrinfo(addrResult);
-		closesocket(g_serverSocket);
-		WSACleanup();
 		return false;
 	}
 
 	if (listen(g_serverSocket, SOMAXCONN) == SOCKET_ERROR)
 	{
 		printf("Unable to listen on socket: %ld\n", WSAGetLastError());
-		closesocket(g_serverSocket);
-		WSACleanup();
 		return false;
 	}
 
@@ -195,7 +190,9 @@ void HandleHTTPRequest()
 
 	if (clientSocket == INVALID_SOCKET)
 	{
-		printf("accept failed: %d\n", WSAGetLastError());
+		if (WebService::Running)
+			printf("accept failed: %d\n", WSAGetLastError());
+		
 		return;
 	}
 
@@ -402,13 +399,21 @@ bool QueryServerAddress()
 	return true;
 }
 
+void Cleanup()
+{
+	WebService::Stop();
+	closesocket(g_serverSocket);
+	WSACleanup();
+}
+
 BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
 {
 	switch (fdwCtrlType)
 	{
+	case CTRL_C_EVENT:
 	case CTRL_CLOSE_EVENT:
-		printf("CTRL_CLOSE_EVENT\n");
-		WebService::Stop();
+		puts("Stopping...");
+		Cleanup();
 		return TRUE;
 	}
 
@@ -426,6 +431,7 @@ bool StartupSequence()
 	if (!InitializeSymbolHook())
 	{
 		puts("StandardOut redirection will not apply");
+		return false;
 	}
 
 	if (!QueryServerAddress())
@@ -509,7 +515,8 @@ int _tmain(int argc, _TCHAR *argv[])
 
 	if (dllMissing || !StartupSequence())
 	{
-		WebService::Stop();
+		Cleanup();
+		getchar();
 		return 1;
 	}
 

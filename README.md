@@ -9,7 +9,6 @@ This *must* be compiled using MSVC 8 on Visual Studio 2005. Releases are given i
 The content folder must be placed at `C:\ProgramData\Roblox\Content`.
 
 Things that still need doing:
-- Make Ctrl+C work
 - Path selection for content folder
 
 ![image-1](https://github.com/user-attachments/assets/96f46aec-be4c-4470-97b0-9f2e809722ba)
