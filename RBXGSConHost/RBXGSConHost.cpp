@@ -85,7 +85,7 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 	response << "Date: " << timeHeaderBuf << "\r\n";
 	response << "Server: RBXGSConHost\r\n";
 
-	if (strncmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
+	if (strnicmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
 		response << "Content-Type: text/xml\r\n";
 
 	response << "Content-Length: " << *lpdwBytes << "\r\n";
