@@ -136,6 +136,8 @@
 				Name="VCLinkerTool"
 				AdditionalDependencies="Ws2_32.lib Iphlpapi.lib Dbghelp.lib Shlwapi.lib lib\libMinHook-x86-v90-mtd.lib"
 				LinkIncremental="1"
+				IgnoreAllDefaultLibraries="false"
+				IgnoreDefaultLibraryNames="LIBCMTD"
 				GenerateDebugInformation="true"
 				SubSystem="1"
 				OptimizeReferences="2"

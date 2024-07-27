@@ -76,18 +76,20 @@ BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dw
 	std::stringstream response;
 
 	time_t rawtime;
-	struct tm *timeinfo;
+	struct tm timeinfo;
 	char timeHeaderBuf[64];
 
 	time(&rawtime);
-	timeinfo = gmtime(&rawtime);
+	if (!_gmtime64_s(&timeinfo, &rawtime))
+	{
+		strftime(timeHeaderBuf, sizeof(timeHeaderBuf), "%a, %d %b %Y %H:%M:%S GMT", &timeinfo);
+		response << "Date: " << timeHeaderBuf << "\r\n";
+	}
 
-	strftime(timeHeaderBuf, sizeof(timeHeaderBuf), "%a, %d %b %Y %H:%M:%S GMT", timeinfo);
 
-	response << "Date: " << timeHeaderBuf << "\r\n";
 	response << "Server: RBXGSConHost\r\n";
 
-	if (strnicmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
+	if (_strnicmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
 		response << "Content-Type: text/xml\r\n";
 
 	response << "Content-Length: " << *lpdwBytes << "\r\n";
@@ -351,7 +353,7 @@ bool InitializeSymbolHook()
     	return false;
 	}
 
-	if (moduleInfo.SymType != SYM_TYPE::SymPdb)
+	if (moduleInfo.SymType != SymPdb)
 	{
 		puts("Could not find WebService.pdb");
 		return false;
