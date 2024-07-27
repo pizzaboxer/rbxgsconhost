@@ -9,6 +9,7 @@
 #include <httpext.h>
 #include <iphlpapi.h>
 #include <dbghelp.h>
+#include <shlobj.h>
 #include <shlwapi.h>
 
 #include "MinHook.h"
@@ -18,6 +19,7 @@
 #include "RBXDefs.h"
 
 HANDLE g_consoleHandle;
+char g_contentFolderPath[MAX_PATH];
 char g_modulePath[MAX_PATH];
 char g_serverAddress[48];
 char g_serverPort[6] = "64989";
@@ -297,11 +299,36 @@ void __fastcall RBXStandardOutRaisedHook(void *_this, RBX::StandardOutMessage me
 	RBX::StandardOutRaised(_this, message);	
 }
 
+typedef HRESULT (WINAPI *SHGetFolderPathAndSubDirA_t)(HWND, int, HANDLE, DWORD, LPCSTR, LPSTR);
+
+SHGetFolderPathAndSubDirA_t fpSHGetFolderPathAndSubDirA;
+
+HRESULT WINAPI SHGetFolderPathAndSubDirAHook(HWND hWnd, int csidl, HANDLE hToken, DWORD dwFlags, LPCSTR pszSubDir, LPSTR pszPath)
+{
+	if (csidl == CSIDL_COMMON_APPDATA && strcmp(pszSubDir, "Roblox\\content\\") == 0)
+	{
+		strcpy_s(pszPath, MAX_PATH, g_contentFolderPath);
+		return S_OK;
+	}
+
+	return fpSHGetFolderPathAndSubDirA(hWnd, csidl, hToken, dwFlags, pszSubDir, pszPath);
+}
+
 bool InitializeSymbolHook()
 {
+	if (MH_Initialize() != MH_OK)
+	{
+		puts("Failed to initialize MinHook");
+		puts("Content folder and StandardOut redirection will not apply");
+		return true;
+	}
+
+	if (MH_CreateHook(SHGetFolderPathAndSubDirA, SHGetFolderPathAndSubDirAHook, reinterpret_cast<LPVOID*>(&fpSHGetFolderPathAndSubDirA)) != MH_OK || MH_EnableHook(SHGetFolderPathAndSubDirA) != MH_OK)
+		puts("Failed to create hook for content folder redirection");
+
 	HANDLE hProcess = GetCurrentProcess();
 
-	SymSetOptions(SYMOPT_DEBUG | SYMOPT_LOAD_ANYTHING);
+	SymSetOptions(SYMOPT_LOAD_ANYTHING);
 
 	if (!SymInitialize(hProcess, NULL, FALSE))
 	{
@@ -345,23 +372,8 @@ bool InitializeSymbolHook()
 		return false;
 	}
 
-	if (MH_Initialize() != MH_OK)
-	{
-		puts("Failed to initialize MinHook");
-        return false;
-	}
-
-	if (MH_CreateHook((LPVOID)symbol.Address, RBXStandardOutRaisedHook, reinterpret_cast<LPVOID*>(&RBX::StandardOutRaised)) != MH_OK)
-	{
-		puts("Failed to create hook");
-		return false;
-	}
-
-	if (MH_EnableHook((LPVOID)symbol.Address) != MH_OK)
-	{
-		puts("Failed to enable hook");
-		return false;
-	}
+	if (MH_CreateHook((LPVOID)symbol.Address, RBXStandardOutRaisedHook, reinterpret_cast<LPVOID*>(&RBX::StandardOutRaised)) != MH_OK || MH_EnableHook((LPVOID)symbol.Address) != MH_OK)
+		puts("Failed to create hook for StandardOut redirection");
 
 	return true;
 }
@@ -429,10 +441,7 @@ bool StartupSequence()
 	}
 
 	if (!InitializeSymbolHook())
-	{
 		puts("StandardOut redirection will not apply");
-		return false;
-	}
 
 	if (!QueryServerAddress())
 		return false;
@@ -474,7 +483,6 @@ int _tmain(int argc, _TCHAR *argv[])
 		}
 	}
 
-	// we'll be handling it in ascii form since any place we use it only supports ascii anyway
 	if (wszBaseDir == NULL)
 	{
 		wszBaseDir = (TCHAR*)malloc(MAX_PATH);
@@ -487,16 +495,24 @@ int _tmain(int argc, _TCHAR *argv[])
 		return 1;
 	}
 
+	// we'll be handling it in ascii form since any place we use it only supports ascii anyway
 	wcstombs_s(NULL, szBaseDir, wszBaseDir, MAX_PATH-1);
 
 	PathCombineA(g_modulePath, szBaseDir, "WebService.dll");
+	PathCombineA(g_contentFolderPath, szBaseDir, "content");
 
-	bool dllMissing = false;
+	bool fileMissing = false;
 
 	if (!PathFileExistsA(g_modulePath))
 	{
 		puts("Could not find WebService.dll");
-		dllMissing = true;
+		fileMissing = true;
+	}
+
+	if (!PathFileExistsA(g_contentFolderPath))
+	{
+		puts("Could not find content folder");
+		fileMissing = true;
 	}
 
 	char *files[] = {"OSMESA32.DLL", "OPENGL32.DLL", "GLU32.DLL", "fmodex.dll"};
@@ -509,11 +525,11 @@ int _tmain(int argc, _TCHAR *argv[])
 		if (!PathFileExistsA(path))
 		{
 			printf("Could not find %s\n", files[i]);
-			dllMissing = true;
+			fileMissing = true;
 		}
 	}
 
-	if (dllMissing || !StartupSequence())
+	if (fileMissing || !StartupSequence())
 	{
 		Cleanup();
 		getchar();
