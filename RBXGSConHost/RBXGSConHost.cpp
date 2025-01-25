@@ -3,123 +3,69 @@
 
 #include "stdafx.h"
 
-#include <time.h>
-#include <windows.h>
 #include <tchar.h>
-#include <httpext.h>
 #include <iphlpapi.h>
-#include <dbghelp.h>
-#include <shlobj.h>
 #include <shlwapi.h>
-
-#include "MinHook.h"
 
 #include "HTTPConnection.h"
 #include "WebService.h"
-#include "RBXDefs.h"
+#include "Hooks.h"
 
-HANDLE g_consoleHandle;
-char g_contentFolderPath[MAX_PATH];
+bool g_running = false;
 char g_modulePath[MAX_PATH];
-char g_serverAddress[48];
-char g_serverPort[6] = "64989";
+char g_contentFolderPath[MAX_PATH];
 SOCKET g_serverSocket;
+HTTPVariableTable g_initVars;
+std::set<HTTPConnection*> g_serverConnections;
 
-BOOL WINAPI GetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuffer, LPDWORD lpdwSize)
-{
-	// printf("GetServerVariable called\n");
-	// printf("%s %d\n", lpszVariableName, *lpdwSize);
-
-	char *szBuffer = (char*)lpvBuffer;
-	HTTPConnection *conn = HTTPConnection::Get((int)hConn);
-	HTTPParser *parser = conn->parser;
-
-	if (strcmp(lpszVariableName, "SERVER_PORT") == 0)
-	{
-		strcpy_s(szBuffer, *lpdwSize, g_serverPort);
-		return TRUE;
-	}
-
-	if (strcmp(lpszVariableName, "HTTPS") == 0)
-	{
-		// should this follow X-Forwarded-Proto?
-		strcpy_s(szBuffer, *lpdwSize, "off");
-		return TRUE;
-	}
-
-	std::map<std::string, std::string>::iterator iter = parser->serverVars.find(lpszVariableName);
-
-	if (iter == parser->serverVars.end())
-	{
-		SetLastError(ERROR_INVALID_INDEX);
-		// printf("Failed to GetServerVariable %s (index not found)\n", lpszVariableName);
-		return FALSE;
-	}
-
-	if (iter->second.size() > *lpdwSize)
-	{
-		SetLastError(ERROR_INSUFFICIENT_BUFFER);
-		return FALSE;
-	}
-
-	strcpy_s(szBuffer, *lpdwSize, iter->second.c_str());
-	return TRUE;
-}
-
-BOOL WINAPI WriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dwReserved)
-{
-	// printf("WriteClient called\n");
-
-	char *szBuffer = (char*)Buffer;
-	HTTPConnection *conn = HTTPConnection::Get((int)ConnID);
-
-	std::stringstream response;
-
-	time_t rawtime;
-	struct tm timeinfo;
-	char timeHeaderBuf[64];
-
-	time(&rawtime);
-	if (!_gmtime64_s(&timeinfo, &rawtime))
-	{
-		strftime(timeHeaderBuf, sizeof(timeHeaderBuf), "%a, %d %b %Y %H:%M:%S GMT", &timeinfo);
-		response << "Date: " << timeHeaderBuf << "\r\n";
-	}
-
-
-	response << "Server: RBXGSConHost\r\n";
-
-	if (_strnicmp(szBuffer, "<soap:", 6) == 0 || strncmp(szBuffer, "<?xml", 5) == 0)
-		response << "Content-Type: text/xml\r\n";
-
-	response << "Content-Length: " << *lpdwBytes << "\r\n";
-	response << "\r\n";
-	response << szBuffer << "\r\n";
-
-	conn->response.append(response.str());
-
-	return TRUE;
-}
-
-BOOL WINAPI ReadClient(HCONN ConnID, LPVOID lpvBuffer, LPDWORD lpdwSize)
+BOOL WINAPI ISAPIReadClient(HCONN ConnID, LPVOID lpvBuffer, LPDWORD lpdwSize)
 {
 	printf("ReadClient called\n");
 	return FALSE;
 }
 
-BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuffer, LPDWORD lpdwSize, LPDWORD lpdwDataType)
+BOOL WINAPI ISAPIWriteClient(HCONN ConnID, LPVOID Buffer, LPDWORD lpdwBytes, DWORD dwReserved)
 {
-	// printf("ServerSupportFunction called\n");
-	// printf("dwHSERequest: %d\n", dwHSERequest);
-	// printf("lpdwSize: %x\n", *lpdwSize);
+	HTTPConnection::Get(ConnID)->Write(static_cast<const char*>(Buffer), *lpdwBytes);
+	return TRUE;
+}
 
-	HTTPConnection *conn = HTTPConnection::Get((int)hConn);
+BOOL WINAPI ISAPIGetServerVariable(HCONN hConn, LPSTR lpszVariableName, LPVOID lpvBuffer, LPDWORD lpdwSize)
+{
+	HTTPConnection *conn = HTTPConnection::Get(hConn);
+	const HTTPSession *session = conn->GetSession();
+		
+	HTTPVariableTable::const_iterator it = session->serverVars.find(lpszVariableName);
+
+	if (it == session->serverVars.end())
+	{
+		SetLastError(ERROR_INVALID_INDEX);
+#ifdef _DEBUG
+		printf("Failed to GetServerVariable %s (index not found)\n", lpszVariableName);
+#endif
+		return FALSE;
+	}
+
+	const std::string &value = it->second;
+
+	if (value.size() > *lpdwSize)
+	{
+		SetLastError(ERROR_INSUFFICIENT_BUFFER);
+		return FALSE;
+	}
+
+	strcpy_s(static_cast<char*>(lpvBuffer), *lpdwSize, value.c_str());
+	return TRUE;
+}
+
+BOOL WINAPI ISAPIServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuffer, LPDWORD lpdwSize, LPDWORD lpdwDataType)
+{
+	HTTPConnection *conn = HTTPConnection::Get(hConn);
 
 	switch (dwHSERequest)
 	{
 	case HSE_REQ_DONE_WITH_SESSION: // 4
-		conn->FlushAndClose();
-		delete conn;
+		conn->EndSession();
 		return TRUE;
 
 	case HSE_REQ_GET_IMPERSONATION_TOKEN: // 1011
@@ -135,9 +81,11 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
 		return TRUE;
 
 	case HSE_REQ_SEND_RESPONSE_HEADER_EX: // 1016
-		conn->response.append("HTTP/1.1 ");
-		conn->response.append(((HSE_SEND_HEADER_EX_INFO *)lpvBuffer)->pszStatus);
-		conn->response.append("\r\n");
+		LPHSE_SEND_HEADER_EX_INFO headerInfo = static_cast<LPHSE_SEND_HEADER_EX_INFO>(lpvBuffer);
+
+		conn->keepAlive = headerInfo->fKeepConn == TRUE;
+		conn->WriteHeaders(headerInfo->pszStatus, headerInfo->pszHeader); 
+
 		return TRUE;
 	}
 
@@ -146,9 +94,42 @@ BOOL WINAPI ServerSupportFunction(HCONN hConn, DWORD dwHSERequest, LPVOID lpvBuf
 	return FALSE;
 }
 
+bool QueryInterfaceAddress(LPSTR szAddress, DWORD lenAddress)
+{
+	unsigned long lenAddresses = 16384;
+	PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES)malloc(lenAddresses);
+
+	if (addresses == NULL)
+	{
+		puts("Could not query adapters");
+		return false;
+	}
+
+	int result = GetAdaptersAddresses(AF_UNSPEC, NULL, NULL, addresses, &lenAddresses);
+	
+	if (result != ERROR_SUCCESS)
+	{
+		printf("Could not query adapters (%d)\n", result);
+		return false;
+	}
+
+	_IP_ADAPTER_UNICAST_ADDRESS *address = addresses->FirstUnicastAddress;
+
+	if (address == NULL)
+	{
+		puts("Could not query address");
+		return false;
+	}
+
+	WSAAddressToStringA(address->Address.lpSockaddr, 
+		address->Address.iSockaddrLength, NULL, szAddress, &lenAddress);
+
+	return true;
+}
+
 bool StartHTTPServer(const char *port)
 {
-	// WSA is implicitly initialized by RBXGS, seems to be <2.2.0
+	// winsock is implicitly initialized by RBXGS, seems to be <2.2.0
 
 	int result;
 
@@ -183,325 +164,116 @@ bool StartHTTPServer(const char *port)
 		printf("Unable to listen on socket: %ld\n", WSAGetLastError());
 		return false;
 	}
+	
+	char address[48];
 
-	printf("Listening on port %s\n", g_serverPort);
+	if (!QueryInterfaceAddress(address, sizeof(address)))
+		return false;
+
+	g_initVars["SERVER_NAME"] = address;
+	g_initVars["SERVER_PORT"] = port;
+	g_initVars["HTTPS"] = "off";
+
+	printf("Listening on port %s\n", port);
 	return true;
 }
 
-void HandleHTTPRequest()
+DWORD WINAPI HTTPRequestThread(LPVOID lpParam)
 {
-	SOCKET clientSocket = accept(g_serverSocket, NULL, NULL);
+	SOCKET clientSocket = *reinterpret_cast<SOCKET*>(lpParam);
 
-	if (clientSocket == INVALID_SOCKET)
-	{
-		if (WebService::Running)
-			printf("accept failed: %d\n", WSAGetLastError());
-		
-		return;
-	}
+	HTTPConnection *conn = new HTTPConnection(clientSocket);
+	HTTPSession *session = new HTTPSession(g_initVars);
 
-	HTTPConnection *conn = HTTPConnection::CreateNew(clientSocket);
-	HTTPParser *parser = conn->parser;
-	parser->serverVars["SERVER_NAME"] = g_serverAddress;
+	g_serverConnections.insert(conn);
 
-	int rret;
+	int ret;
 
 	do
 	{
-		rret = recv(clientSocket, parser->message + parser->messageLength, sizeof(parser->message) - parser->messageLength, 0);
+#ifdef _DEBUG
+		puts("Waiting for receive");
+#endif
 
-		if (rret > 0)
-		{
-			parser->FeedBuffer(rret);
-
-			if (parser->finished)
-			{
-				break;
-			}
-			else if (parser->error)
-			{
-				conn->TerminateWithError(400);
-				delete conn;
-				return;
-			}
-			else if (parser->messageLength == sizeof(parser->message))
-			{
-				conn->TerminateWithError(413);
-				delete conn;
-				return;
-			}
-		}
-		else if (rret == 0)
-		{
-			// printf("Connection closing...\n");
-			conn->FlushAndClose();
-			delete conn;
-			return;
-		}
-		else
-		{
-			printf("Client socket receive error: %d\n", WSAGetLastError());
-			conn->FlushAndClose();
-			delete conn;
-			return;
-		}
-	} while (rret > 0);
-
-	EXTENSION_CONTROL_BLOCK ecb = {0};
-
-	ecb.cbSize = sizeof(ecb);
-	ecb.ConnID = (HCONN)conn->id;
-	ecb.dwVersion = 393216; // IIS 6.0
-	ecb.dwHttpStatusCode = 200;
-
-	ecb.lpszPathInfo = (LPSTR)"/RBXGS/WebService.dll";
-	ecb.lpszPathTranslated = g_modulePath;
-
-	ecb.lpszMethod = (LPSTR)parser->method.c_str();
-	ecb.lpszQueryString = (LPSTR)parser->query.c_str();
-	ecb.cbTotalBytes = parser->contentLength;
-	ecb.cbAvailable = parser->contentLength;
-	ecb.lpbData = (LPBYTE)(parser->contentLength == 0 ? NULL : parser->body);
+		ret = recv(clientSocket, session->message + session->messageLength, 
+			sizeof(session->message) - session->messageLength, 0);
 	
-	ecb.lpszContentType = (LPSTR)parser->contentType.c_str();
+#ifdef _DEBUG
+		printf("Received %d\n", ret);
+#endif
 
-	ecb.GetServerVariable = GetServerVariable;
-	ecb.WriteClient = WriteClient;
-	ecb.ReadClient = ReadClient;
-	ecb.ServerSupportFunction = ServerSupportFunction;
-
-	WebService::HttpExtensionProc(&ecb);
-}
-
-void __fastcall RBXStandardOutRaisedHook(void *_this, RBX::StandardOutMessage message)
-{
-	switch (message.type)
-	{
-		case RBX::MESSAGE_OUTPUT:
-			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-			break;
-
-		case RBX::MESSAGE_INFO:
-			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_BLUE | FOREGROUND_INTENSITY);
-			break;
-
-		case RBX::MESSAGE_WARNING:
-			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN);
-			break;
-
-		case RBX::MESSAGE_ERROR:
-			SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_INTENSITY);
-			break;
-	}
-
-	puts(message.message.c_str());
-
-	SetConsoleTextAttribute(g_consoleHandle, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
-
-	RBX::StandardOutRaised(_this, message);	
-}
-
-typedef HRESULT (WINAPI *SHGetFolderPathAndSubDirA_t)(HWND, int, HANDLE, DWORD, LPCSTR, LPSTR);
-
-SHGetFolderPathAndSubDirA_t fpSHGetFolderPathAndSubDirA;
-
-HRESULT WINAPI SHGetFolderPathAndSubDirAHook(HWND hWnd, int csidl, HANDLE hToken, DWORD dwFlags, LPCSTR pszSubDir, LPSTR pszPath)
-{
-	if (csidl == CSIDL_COMMON_APPDATA && strcmp(pszSubDir, "Roblox\\content\\") == 0)
-	{
-		strcpy_s(pszPath, MAX_PATH, g_contentFolderPath);
-		return S_OK;
-	}
-
-	return fpSHGetFolderPathAndSubDirA(hWnd, csidl, hToken, dwFlags, pszSubDir, pszPath);
-}
-
-bool InitializeSymbolHook()
-{
-	if (MH_Initialize() != MH_OK)
-	{
-		puts("Failed to initialize MinHook");
-		puts("Content folder and StandardOut redirection will not apply");
-		return true;
-	}
-
-	if (MH_CreateHook(SHGetFolderPathAndSubDirA, SHGetFolderPathAndSubDirAHook, reinterpret_cast<LPVOID*>(&fpSHGetFolderPathAndSubDirA)) != MH_OK || MH_EnableHook(SHGetFolderPathAndSubDirA) != MH_OK)
-		puts("Failed to create hook for content folder redirection");
-
-	HANDLE hProcess = GetCurrentProcess();
-
-	SymSetOptions(SYMOPT_LOAD_ANYTHING);
-
-	if (!SymInitialize(hProcess, NULL, FALSE))
-	{
-		printf("SymInitialize failed: %d\n", GetLastError());
-		return false;
-	}
-
-	DWORD moduleBase = SymLoadModuleEx(hProcess, NULL, g_modulePath, NULL, 0, 0, NULL, 0);
-	if (moduleBase == 0)
-	{
-		printf("SymLoadModuleEx failed: %d\n", GetLastError());
-		return false;
-	}
-
-	IMAGEHLP_MODULE moduleInfo = {0};
-	moduleInfo.SizeOfStruct = sizeof(moduleInfo);
-	if (!SymGetModuleInfo(hProcess, moduleBase, &moduleInfo))
-	{
-    	printf("SymGetModuleInfo failed: %d\n", GetLastError());
-    	return false;
-	}
-
-	if (moduleInfo.SymType != SymPdb)
-	{
-		puts("Could not find WebService.pdb");
-		return false;
-	}
-
-	// void __thiscall RBX::Notifier<RBX::StandardOut,RBX::StandardOutMessage>::raise(
-	//         RBX::Notifier<RBX::StandardOut,RBX::StandardOutMessage> *this,
-	//         RBX::StandardOutMessage event)
-
-	// versions of windows that are too old will not be able to read the symbols (for some reason)
-	// only version i've tested this on is server 2003
-
-	IMAGEHLP_SYMBOL symbol = {0};
-	if (!SymGetSymFromName(hProcess, "?raise@?$Notifier@VStandardOut@RBX@@UStandardOutMessage@2@@RBX@@IBEXUStandardOutMessage@2@@Z", &symbol))
-	{
-		printf("SymGetSymFromName failed: %d\n", GetLastError());
-		puts("This may be because the version of Windows is too old");
-		return false;
-	}
-
-	if (MH_CreateHook((LPVOID)symbol.Address, RBXStandardOutRaisedHook, reinterpret_cast<LPVOID*>(&RBX::StandardOutRaised)) != MH_OK || MH_EnableHook((LPVOID)symbol.Address) != MH_OK)
-		puts("Failed to create hook for StandardOut redirection");
-
-	return true;
-}
-
-bool QueryServerAddress()
-{
-	unsigned long lenAddresses = 16384;
-	PIP_ADAPTER_ADDRESSES addresses = (PIP_ADAPTER_ADDRESSES)malloc(lenAddresses);
-
-	if (addresses == NULL)
-	{
-		puts("Could not query adapters\n");
-		return false;
-	}
-
-	int result = GetAdaptersAddresses(AF_UNSPEC, NULL, NULL, addresses, &lenAddresses);
-	
-	if (result != ERROR_SUCCESS)
-	{
-		printf("Could not query adapters (%d)\n", result);
-		return false;
-	}
-
-	_IP_ADAPTER_UNICAST_ADDRESS *address = addresses->FirstUnicastAddress;
-	DWORD serverAddressLen = sizeof(g_serverAddress);
-
-	if (address == NULL)
-	{
-		puts("Could not query address\n");
-		return false;
-	}
-
-	WSAAddressToStringA(address->Address.lpSockaddr, address->Address.iSockaddrLength, NULL, g_serverAddress, &serverAddressLen);
-
-	return true;
-}
-
-void Cleanup()
-{
-	WebService::Stop();
-	closesocket(g_serverSocket);
-	WSACleanup();
-}
-
-BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
-{
-	switch (fdwCtrlType)
-	{
-	case CTRL_C_EVENT:
-	case CTRL_CLOSE_EVENT:
-		puts("Stopping...");
-		Cleanup();
-		return TRUE;
-	}
-
-	return FALSE;
-}
-
-bool StartupSequence()
-{
-	if (!WebService::Initialize(g_modulePath))
-	{
-		puts("Could not initialize web service");
-		return false;
-	}
-
-	if (!InitializeSymbolHook())
-		puts("StandardOut redirection will not apply");
-
-	if (!QueryServerAddress())
-		return false;
-
-	if (!StartHTTPServer(g_serverPort))
-	{
-		puts("Could not start HTTP server");
-		return false;
-	}
-
-	return true;
-}
-
-int _tmain(int argc, _TCHAR *argv[])
-{
-	g_consoleHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-
-	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
-	
-	// by default, the base path is the folder the exe is located in
-	TCHAR *wszBaseDir = NULL;
-	char szBaseDir[MAX_PATH];
-
-	if (argc > 0)
-	{
-		for (int i = 0; i < argc-1; i++)
+		if (ret > 0)
 		{
-			if (wcscmp(argv[i], L"-p") == 0 || wcscmp(argv[i], L"--port") == 0)
-			{
-				int port = _wtoi(argv[i+1]);
+			session->FeedBuffer(ret);
 
-				if (port > 0 && port < 65535)
-					_itoa_s(port, g_serverPort, 10);
-			}
-			else if (wcscmp(argv[i], L"-b") == 0 || wcscmp(argv[i], L"--baseDir") == 0)
+			if (session->finished)
 			{
-				wszBaseDir = argv[i+1];
+				conn->StartSession(session);
+
+				EXTENSION_CONTROL_BLOCK ecb = {0};
+
+				ecb.cbSize = sizeof(ecb);
+				ecb.dwVersion = 393216; // IIS 6.0
+				ecb.dwHttpStatusCode = 500;
+
+				ecb.lpszPathInfo = (LPSTR)"/RBXGS/WebService.dll";
+				ecb.lpszPathTranslated = g_modulePath;
+
+				ecb.lpszMethod = (LPSTR)session->method.c_str();
+				ecb.lpszQueryString = (LPSTR)session->query.c_str();
+				ecb.cbTotalBytes = session->contentLength;
+				ecb.cbAvailable = session->contentLength;
+				ecb.lpbData = (LPBYTE)(session->contentLength == 0 ? NULL : session->messagePos);
+				
+				ecb.lpszContentType = (LPSTR)session->contentType.c_str();
+
+				ecb.GetServerVariable = ISAPIGetServerVariable;
+				ecb.WriteClient = ISAPIWriteClient;
+				ecb.ReadClient = ISAPIReadClient;
+				ecb.ServerSupportFunction = ISAPIServerSupportFunction;
+				ecb.ConnID = (HCONN)conn;
+
+				WebService::HttpExtensionProc(&ecb);
+
+				session = new HTTPSession(g_initVars);
+			}
+			else if (session->error)
+			{
+				conn->SendError(400);
+				session->Reset();
 			}
 		}
-	}
+		else if (ret == 0)
+		{
+			if (session->messageLength == sizeof(session->message))
+				conn->SendError(413);
+		}
+		else if (g_running)
+		{
+			printf("Client socket receive error %d, %d\n", ret, WSAGetLastError());
+		}
+	} while (ret > 0);
 
-	if (wszBaseDir == NULL)
-	{
-		wszBaseDir = (TCHAR*)malloc(MAX_PATH);
-		GetModuleFileName(NULL, wszBaseDir, MAX_PATH);
-		PathRemoveFileSpec(wszBaseDir);
-	}
-	else if (!PathIsDirectory(wszBaseDir))
+	g_serverConnections.erase(conn);
+
+	delete conn;
+	delete session;
+
+	return 0;
+}
+
+bool Startup(const char *baseDir, const char *port)
+{
+	if (!PathIsDirectoryA(baseDir))
 	{
 		puts("The specified base directory does not exist");
-		return 1;
+		return false;
 	}
 
-	// we'll be handling it in ascii form since any place we use it only supports ascii anyway
-	wcstombs_s(NULL, szBaseDir, wszBaseDir, MAX_PATH-1);
+	char *files[] = {"OSMESA32.DLL", "OPENGL32.DLL", "GLU32.DLL", "fmodex.dll"};
 
-	PathCombineA(g_modulePath, szBaseDir, "WebService.dll");
-	PathCombineA(g_contentFolderPath, szBaseDir, "content");
+	PathCombineA(g_modulePath, baseDir, "WebService.dll");
+	PathCombineA(g_contentFolderPath, baseDir, "content");
 
 	bool fileMissing = false;
 
@@ -517,12 +289,10 @@ int _tmain(int argc, _TCHAR *argv[])
 		fileMissing = true;
 	}
 
-	char *files[] = {"OSMESA32.DLL", "OPENGL32.DLL", "GLU32.DLL", "fmodex.dll"};
-
 	for (int i = 0; i < sizeof(files)/sizeof(char*); i++)
 	{
-		char path[256];
-		PathCombineA(path, szBaseDir, files[i]);
+		char path[MAX_PATH];
+		PathCombineA(path, baseDir, files[i]);
 
 		if (!PathFileExistsA(path))
 		{
@@ -531,16 +301,127 @@ int _tmain(int argc, _TCHAR *argv[])
 		}
 	}
 
-	if (fileMissing || !StartupSequence())
+	if (fileMissing)
+		return false;
+
+	if (!InitWebService(g_modulePath))
 	{
-		Cleanup();
+		puts("Could not initialize web service");
+		return false;
+	}
+
+	InitHooks(g_modulePath, g_contentFolderPath);
+
+	if (!StartHTTPServer(port))
+	{
+		puts("Could not start HTTP server");
+		return false;
+	}
+
+	g_running = true;
+
+	return true;
+}
+
+void Shutdown()
+{
+	g_running = false;
+
+	StopWebService();
+
+	for (std::set<HTTPConnection*>::iterator it = g_serverConnections.begin(); it != g_serverConnections.end(); ++it)
+		(*it)->Close();
+
+	closesocket(g_serverSocket);
+}
+
+BOOL WINAPI ConsoleCtrlHandler(DWORD fdwCtrlType)
+{
+	switch (fdwCtrlType)
+	{
+	case CTRL_C_EVENT:
+	case CTRL_CLOSE_EVENT:
+		puts("Stopping...");
+		Shutdown();
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+int _tmain(int argc, _TCHAR *argv[])
+{
+	SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+	
+	// by default, the base path is the folder the exe is located in
+	TCHAR wszBaseDir[MAX_PATH] = TEXT("");
+	char szBaseDir[MAX_PATH] = "";
+	char szPort[6] = "64989";
+	bool overrideBaseDir = false;
+	TCHAR** lppPart = {NULL};
+
+	for (int i = 0; i < argc; i++)
+	{
+		if (wcscmp(argv[i], L"-h") == 0 || wcscmp(argv[i], L"--help") == 0)
+		{
+			puts("RBXGSConHost v1.2.0 (https://github.com/pizzaboxer/rbxgsconhost)\n");
+			puts("Usage:");
+			puts("  -h, --help            Print this help message");
+			puts("  -p, --port <port>     Specify web server port (default is 64989)");
+			puts("  -b, --baseDir <path>  Specify path where RBXGS is located (default is working dir)");
+			return 0;
+		}
+
+		if (i < argc-1)
+		{
+			if (wcscmp(argv[i], L"-p") == 0 || wcscmp(argv[i], L"--port") == 0)
+			{
+				int port = _wtoi(argv[i+1]);
+
+				if (port > 0 && port < 65535)
+					_itoa_s(port, szPort, 10);
+			}
+			else if (wcscmp(argv[i], L"-b") == 0 || wcscmp(argv[i], L"--baseDir") == 0)
+			{
+				GetFullPathNameW(argv[i+1], MAX_PATH, wszBaseDir, lppPart);
+				overrideBaseDir = true;
+			}
+		}
+	}
+
+	if (!overrideBaseDir)
+	{
+		GetModuleFileName(NULL, wszBaseDir, MAX_PATH);
+		PathRemoveFileSpec(wszBaseDir);
+	}
+
+	// we'll be handling it in ascii form since any place we use it only really supports ascii anyway
+	wcstombs_s(NULL, szBaseDir, wszBaseDir, MAX_PATH-1);
+
+	if (!Startup(szBaseDir, szPort))
+	{
+		Shutdown();
+#ifdef _DEBUG
 		getchar();
+#endif
 		return 1;
 	}
 
-	while (WebService::Running)
+	while (g_running)
 	{
-		HandleHTTPRequest();
+		SOCKET clientSocket = accept(g_serverSocket, NULL, NULL);
+
+		if (g_running)
+		{
+#ifdef _DEBUG
+			puts("Accepted new connection");
+#endif
+
+			if (clientSocket == INVALID_SOCKET)
+				printf("accept failed: %d\n", WSAGetLastError());
+			else
+				CreateThread(NULL, 0, HTTPRequestThread, &clientSocket, 0, NULL);
+		}
 	}
 
 	return 0;

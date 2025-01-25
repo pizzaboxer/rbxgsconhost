@@ -1,25 +1,30 @@
 #pragma once
 
-#include "HTTPParser.h"
+#include "HTTPSession.h"
 
 class HTTPConnection
 {
 private:
-    SOCKET clientSocket;
-    bool closed;
+	const SOCKET clientSocket;
+	const HTTPSession *session;
+	bool sessionPresent;
 
 public:
-    int id;
+	bool keepAlive;
 
-    HTTPParser *parser;
-    std::string response;
+	HTTPConnection(SOCKET clientSocket);
+	~HTTPConnection();
 
-    HTTPConnection(int id, SOCKET clientSocket);
-    ~HTTPConnection();
+	static HTTPConnection* Get(HCONN hConn);
 
-    static HTTPConnection *CreateNew(SOCKET clientSocket);
-    static HTTPConnection *Get(int id);
+	void WriteHeaders(const char *status, const char *additional);
+	void Write(const char *buf, int len);
+	void Write(std::string content);
 
-    void TerminateWithError(int code);
-    void FlushAndClose();
+	void StartSession(const HTTPSession *session);
+	void EndSession();
+	const HTTPSession* GetSession() const;
+
+	void SendError(int code);
+	void Close();
 };

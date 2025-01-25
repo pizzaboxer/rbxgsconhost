@@ -1,95 +1,142 @@
 #include "stdafx.h"
 #include "HTTPConnection.h"
 
-std::map<int, HTTPConnection *> g_httpConnections;
-int g_idCounter = 0;
-
-HTTPConnection::HTTPConnection(int id, SOCKET clientSocket)
+HTTPConnection::HTTPConnection(SOCKET clientSocket)
+	: clientSocket(clientSocket),
+	sessionPresent(false),
+	keepAlive(true)
 {
-	this->id = id;
-	this->clientSocket = clientSocket;
-	this->response = "";
-	this->closed = false;
-	this->parser = new HTTPParser();
 }
 
 HTTPConnection::~HTTPConnection()
 {
-	g_httpConnections.erase(clientSocket);
+#ifdef _DEBUG
+	puts("HTTPConnection destroyed");
+#endif
 }
 
-HTTPConnection *HTTPConnection::CreateNew(SOCKET clientSocket)
+HTTPConnection* HTTPConnection::Get(HCONN hConn)
 {
-	HTTPConnection *conn = new HTTPConnection(++g_idCounter, clientSocket);
-	g_httpConnections[conn->id] = conn;
-	return conn;
+	return static_cast<HTTPConnection*>(hConn);
 }
 
-HTTPConnection *HTTPConnection::Get(int id)
+void HTTPConnection::WriteHeaders(const char *status, const char *additional)
 {
-	std::map<int, HTTPConnection *>::iterator iter = g_httpConnections.find(id);
+	std::ostringstream httpOut;
 
-	if (iter == g_httpConnections.end())
+	httpOut << "HTTP/1.1 " << status << "\r\n";
+	httpOut << "Server: RBXGSConHost\r\n";
+
+	time_t rawtime;
+	struct tm timeinfo;
+	char timeHeaderBuf[64];
+
+	time(&rawtime);
+	if (_gmtime64_s(&timeinfo, &rawtime) == 0)
 	{
-		printf("Could not find connection %d\n", id);
-		return NULL;
+		strftime(timeHeaderBuf, sizeof(timeHeaderBuf), "%a, %d %b %Y %H:%M:%S GMT", &timeinfo);
+		httpOut << "Date: " << timeHeaderBuf << "\r\n";
 	}
 
-	return iter->second;
+	if (!keepAlive)
+		httpOut << "Connection: close\r\n";
+
+	if (additional == NULL)
+		httpOut << "\r\n";
+	else
+		httpOut << additional;
+
+	Write(httpOut.str());
 }
 
-void HTTPConnection::TerminateWithError(int code)
+void HTTPConnection::Write(const char *buf, int len)
 {
-	char *statusLine = "";
-	char body[64];
-	std::stringstream ssResponse;
+	if (send(clientSocket, buf, len, 0) == SOCKET_ERROR)
+		printf("WARNING: client socket send error (%d)\n", WSAGetLastError());
+}
+
+void HTTPConnection::Write(std::string content)
+{
+	Write(content.c_str(), (int)content.length());
+}
+
+void HTTPConnection::StartSession(const HTTPSession *session)
+{
+#ifdef _DEBUG
+	puts("Session start");
+#endif
+
+	this->session = session;
+	sessionPresent = true;
+}
+
+void HTTPConnection::EndSession()
+{
+#ifdef _DEBUG
+	puts("Session end");
+#endif
+
+	if (sessionPresent)
+	{
+		sessionPresent = false;
+		delete session;
+	}
+
+	if (!keepAlive)
+	{
+#ifdef _DEBUG
+		puts("Closing connection");
+#endif
+		shutdown(clientSocket, SD_SEND);
+	}
+}
+
+const HTTPSession* HTTPConnection::GetSession() const
+{
+	if (!sessionPresent)
+		return NULL;
+
+	return session;
+}
+
+void HTTPConnection::SendError(int code)
+{
+#ifdef _DEBUG
+	printf("Sending HTTP %d\n", code);
+#endif
+
+	std::ostringstream httpOut;
+	std::string status;
 
 	switch (code)
 	{
 	case 400:
-		statusLine = "Bad Request";
+		status = "400 Bad Request";
 		break;
 	case 413:
-		statusLine = "Content Too Large";
+		status = "413 Content Too Large";
 		break;
-	}
-
-	ssResponse << "HTTP/1.1 " << code;
-
-	if (statusLine == "")
-	{
-		ssResponse << "\r\n";
-		sprintf_s(body, "<h1>HTTP %d</h1>", code);
-	}
-	else
-	{
-		ssResponse << " " << statusLine << "\r\n";
-		sprintf_s(body, "<h1>%s</h1>", statusLine);
-	}
-
-	ssResponse << "Content-Type: text/html\r\n";
-	ssResponse << "Connection: close\r\n";
-	ssResponse << "Content-Length: " << strlen(body) << "\r\n";
-	ssResponse << "\r\n";
-	ssResponse << body;
-
-	response = ssResponse.str();
-
-	FlushAndClose();
-}
-
-void HTTPConnection::FlushAndClose()
-{
-	if (closed)
-	{
-		puts("WARNING: connection already closed\n");
+	case 500:
+		status = "500 Internal Server Error";
+		break;
+	default:
 		return;
 	}
 
-	if (send(clientSocket, response.c_str(), response.length(), 0) == SOCKET_ERROR)
-		printf("Warning: client socket send error! (%d)\n", WSAGetLastError());
+	std::string body("<h1>" + status + "</h1>");
 
+	httpOut << "Content-Type: text/html\r\n";
+	httpOut << "Content-Length: " << body.length() << "\r\n";
+	httpOut << "\r\n";
+	httpOut << body;
+
+	keepAlive = false;
+
+	WriteHeaders(status.c_str(), httpOut.str().c_str());
+	EndSession();
+}
+
+void HTTPConnection::Close()
+{
 	closesocket(clientSocket);
-
-	closed = true;
 }

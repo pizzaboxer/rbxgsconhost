@@ -179,15 +179,15 @@
 			UniqueIdentifier="{4FC737F1-C7A5-4376-A066-2A32D752A2FF}"
 			>
 			<File
+				RelativePath=".\Hooks.cpp"
+				>
+			</File>
+			<File
 				RelativePath=".\HTTPConnection.cpp"
 				>
 			</File>
 			<File
-				RelativePath=".\HTTPParser.cpp"
-				>
-			</File>
-			<File
-				RelativePath=".\RBXDefs.cpp"
+				RelativePath=".\HTTPSession.cpp"
 				>
 			</File>
 			<File
@@ -225,11 +225,15 @@
 			UniqueIdentifier="{93995380-89BD-4b04-88EB-625FBE52EBFB}"
 			>
 			<File
+				RelativePath=".\Hooks.h"
+				>
+			</File>
+			<File
 				RelativePath=".\HTTPConnection.h"
 				>
 			</File>
 			<File
-				RelativePath=".\HTTPParser.h"
+				RelativePath=".\HTTPSession.h"
 				>
 			</File>
 			<File
